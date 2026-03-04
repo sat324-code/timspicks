@@ -119,35 +119,24 @@ Use real player names from today's actual schedule."""
 
 
 def build_sms_from_json(picks: dict) -> str:
-    lines = [f"🏒 TIMS PICKS — {picks.get('date', TODAY)}", ""]
+    parts = [f"TIMS PICKS {picks.get('date', TODAY)}", "TOP 3:"]
 
-    top3 = picks.get("top3", [])
-    if top3:
-        lines.append("🎯 TOP 3 PICKS:")
-        for p in top3:
-            lines.append(f"  {p.get('rank','')}. {p.get('name','?')} ({p.get('team','')}) {p.get('opponent','')} — {p.get('goal_prob','')}")
-            if p.get('reason'):
-                lines.append(f"     {p['reason']}")
+    for p in picks.get("top3", []):
+        parts.append(f"{p.get('rank','')}. {p.get('name','?')} ({p.get('team','')}) {p.get('opponent','')} {p.get('goal_prob','')}")
 
     bm = picks.get("best_matchup")
     if bm:
         if isinstance(bm, list): bm = bm[0]
-        lines.append("")
-        lines.append(f"📈 BEST MATCHUP: {bm.get('name','?')} ({bm.get('team','')}) {bm.get('opponent','')}")
-        if bm.get('reason'): lines.append(f"   {bm['reason']}")
+        parts.append(f"MATCHUP: {bm.get('name','?')} ({bm.get('team','')}) {bm.get('opponent','')}")
 
     sl = picks.get("sleeper")
     if sl:
         if isinstance(sl, list): sl = sl[0]
-        lines.append(f"😴 SLEEPER: {sl.get('name','?')} ({sl.get('team','')}) {sl.get('opponent','')}")
-        if sl.get('reason'): lines.append(f"   {sl['reason']}")
+        parts.append(f"SLEEPER: {sl.get('name','?')} ({sl.get('team','')}) {sl.get('opponent','')}")
 
-    if picks.get("summary"):
-        lines.append("")
-        lines.append(f"📊 {picks['summary']}")
-
-    lines.extend(["", "Good luck! ☕"])
-    return "\n".join(lines)
+    parts.append("Good luck!")
+    msg = "\n".join(parts)
+    return msg[:300] if len(msg) > 300 else msg
 
 
 def send_sms(body: str) -> str:
