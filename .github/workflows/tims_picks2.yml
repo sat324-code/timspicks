@@ -2,12 +2,14 @@ name: Tims Picks SMS
 
 on:
   schedule:
+    # Runs daily at 12:00 UTC (8:00 AM ET) — adjust as needed
     - cron: '0 12 * * *'
-  workflow_dispatch:
+  workflow_dispatch:   # allows manual trigger from GitHub Actions tab
 
 jobs:
   send-picks:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -17,14 +19,19 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install Chrome
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+
       - name: Install dependencies
-        run: pip install anthropic twilio
+        run: pip install anthropic twilio selenium webdriver-manager
 
       - name: Run Tims Picks SMS script
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_API_KEY:  ${{ secrets.ANTHROPIC_API_KEY }}
           TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
-          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
-          TWILIO_FROM: ${{ secrets.TWILIO_FROM }}
-          TWILIO_TO: ${{ secrets.TWILIO_TO }}
+          TWILIO_AUTH_TOKEN:  ${{ secrets.TWILIO_AUTH_TOKEN }}
+          TWILIO_FROM:        ${{ secrets.TWILIO_FROM }}
+          TWILIO_TO:          ${{ secrets.TWILIO_TO }}
         run: python tims_picks_sms.py
