@@ -1,13 +1,16 @@
 import os
 import re
+import time
 import anthropic
 from twilio.rest import Client
-from urllib.request import urlopen, Request
-from urllib.error import URLError
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 # ── Config ────────────────────────────────────────────────────────────────────
 URL = "https://hockeychallengehelper.com"
-HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; TimsPicksBot/1.0)"}
 
 ANTHROPIC_API_KEY   = os.environ["ANTHROPIC_API_KEY"]
 TWILIO_ACCOUNT_SID  = os.environ["TWILIO_ACCOUNT_SID"]
@@ -15,52 +18,72 @@ TWILIO_AUTH_TOKEN   = os.environ["TWILIO_AUTH_TOKEN"]
 TWILIO_FROM         = os.environ["TWILIO_FROM"]
 TWILIO_TO           = os.environ["TWILIO_TO"]
 
-# ── Scrape ────────────────────────────────────────────────────────────────────
-def fetch_page(url: str) -> str:
-    req = Request(url, headers=HEADERS)
-    with urlopen(req, timeout=15) as resp:
-        return resp.read().decode("utf-8", errors="ignore")
+# ── Scrape with headless Chrome ───────────────────────────────────────────────
+def fetch_rendered_page(url: str) -> str:
+    """Use headless Chrome to fully render the JS page before extracting text."""
+    options = Options()
+    options.add_argument("--headless")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1280,800")
+    options.add_argument(
+        "user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    )
 
-def strip_tags(html: str) -> str:
-    """Very lightweight tag stripper — no external deps needed."""
-    text = re.sub(r"<style[^>]*>.*?</style>", " ", html, flags=re.S)
-    text = re.sub(r"<script[^>]*>.*?</script>", " ", text, flags=re.S)
-    text = re.sub(r"<[^>]+>", " ", text)
-    text = re.sub(r"&nbsp;", " ", text)
-    text = re.sub(r"&amp;", "&", text)
-    text = re.sub(r"&lt;", "<", text)
-    text = re.sub(r"&gt;", ">", text)
-    text = re.sub(r"\s{2,}", " ", text)
-    return text.strip()
+    driver = webdriver.Chrome(options=options)
+    try:
+        driver.get(url)
+        # Wait up to 15s for a table to appear (the picks are in a table)
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located((By.TAG_NAME, "table"))
+        )
+        time.sleep(3)  # extra buffer for dynamic content to settle
+        page_text = driver.find_element(By.TAG_NAME, "body").text
+    except Exception as e:
+        print(f"Warning during page load: {e}")
+        page_text = driver.find_element(By.TAG_NAME, "body").text
+    finally:
+        driver.quit()
+
+    return page_text
 
 # ── Summarise with Claude ─────────────────────────────────────────────────────
 def get_picks_summary(page_text: str) -> str:
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     prompt = f"""
-You are an NHL picks assistant. From the text below, extract today's top 3 recommended players.
+You are an NHL picks assistant. From the text below from hockeychallengehelper.com,
+extract TODAY's top 5 recommended players for the Tim Hortons NHL Hockey Challenge.
 
 Rules:
-- TOTAL message must be 155 characters or less (strict hard limit)
-- Format EXACTLY like this (no extra words):
-Picks: Laine(CBJ) Aho(CAR) Hellebuyck(WPG)
-- Player name + (TEAM) only, no reasons, no emojis, no date, no punctuation between players
-- If goalie is recommended, include them last
-- Output ONLY the single line, nothing else
+- TOTAL message must be 300 characters or less (strict hard limit)
+- Format as multiple lines like this example:
+  🏒 Tim's Picks:
+  Laine(CBJ) 3.2pts
+  Aho(CAR) 2.8pts
+  Hellebuyck(WPG) 2.1pts
+- Include player name, (TEAM abbreviation), and projected points score
+- Round projected points to 1 decimal place
+- If a goalie is recommended include them last
+- Output ONLY the formatted picks, nothing else
 
 Page text:
-{page_text[:4000]}
+{page_text[:6000]}
 """
 
     message = client.messages.create(
         model="claude-opus-4-5",
-        max_tokens=400,
+        max_tokens=200,
         messages=[{"role": "user", "content": prompt}],
     )
     return message.content[0].text.strip()
 
 # ── Send SMS ──────────────────────────────────────────────────────────────────
 def send_sms(body: str) -> None:
+    if len(body) > 300:
+        body = body[:300]
     twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
     message = twilio_client.messages.create(
         body=body,
@@ -71,18 +94,14 @@ def send_sms(body: str) -> None:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
-    print(f"Fetching {URL} …")
-    html = fetch_page(URL)
-    page_text = strip_tags(html)
+    print(f"Fetching (headless Chrome): {URL} …")
+    page_text = fetch_rendered_page(URL)
     print(f"Page text length: {len(page_text)} chars")
+    print(f"Page preview:\n{page_text[:500]}\n")
 
     print("Asking Claude for top picks …")
     summary = get_picks_summary(page_text)
-    print(f"Summary:\n{summary}")
-
-    # Hard truncate to 155 chars as a safety net
-    if len(summary) > 155:
-        summary = summary[:155]
+    print(f"Summary ({len(summary)} chars):\n{summary}")
 
     print("Sending SMS …")
     send_sms(summary)
