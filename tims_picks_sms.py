@@ -38,22 +38,18 @@ def get_picks_summary(page_text: str) -> str:
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     prompt = f"""
-You are an NHL daily-picks assistant. Below is the raw text scraped from
-hockeychallengehelper.com. Your job:
+You are an NHL picks assistant. From the text below, extract today's top 3 recommended players.
 
-1. Identify today's top recommended player picks (typically skaters and goalies
-   for the NHL Daily Challenge or similar contest).
-2. For each pick include: player name, team, and why they are recommended
-   (e.g. matchup, points/goals pace, power-play time, etc.).
-3. Keep the total SMS message under 320 characters so it fits in 2 texts.
-4. Format as:
-   🏒 Tim's Picks – <date>
-   • <Player>, <Team> – <short reason>
-   • ...
-   Good luck!
+Rules:
+- TOTAL message must be 155 characters or less (strict hard limit)
+- Format EXACTLY like this (no extra words):
+Picks: Laine(CBJ) Aho(CAR) Hellebuyck(WPG)
+- Player name + (TEAM) only, no reasons, no emojis, no date, no punctuation between players
+- If goalie is recommended, include them last
+- Output ONLY the single line, nothing else
 
-Raw page text (first 8000 chars):
-{page_text[:8000]}
+Page text:
+{page_text[:4000]}
 """
 
     message = client.messages.create(
@@ -83,6 +79,10 @@ def main():
     print("Asking Claude for top picks …")
     summary = get_picks_summary(page_text)
     print(f"Summary:\n{summary}")
+
+    # Hard truncate to 155 chars as a safety net
+    if len(summary) > 155:
+        summary = summary[:155]
 
     print("Sending SMS …")
     send_sms(summary)
