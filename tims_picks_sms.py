@@ -1,170 +1,91 @@
-"""
-Tims Picks SMS Sender
----------------------
-Fetches today's top NHL picks via Claude AI and sends them
-as a text message via Twilio.
-
-Run manually:  python tims_picks_sms.py
-Schedule it:   See README for cron / GitHub Actions setup.
-"""
-
 import os
 import re
-import json
-import datetime
 import anthropic
 from twilio.rest import Client
+from urllib.request import urlopen, Request
+from urllib.error import URLError
 
-# ── CONFIG ────────────────────────────────────────────────────────────────────
-ANTHROPIC_API_KEY  = os.environ.get("ANTHROPIC_API_KEY",  "YOUR_ANTHROPIC_API_KEY")
-TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
-TWILIO_AUTH_TOKEN  = os.environ.get("TWILIO_AUTH_TOKEN",  "")
-TWILIO_FROM        = os.environ.get("TWILIO_FROM",        "+15705725835")
-TWILIO_TO          = os.environ.get("TWILIO_TO",          "+14164546850")
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Config ────────────────────────────────────────────────────────────────────
+URL = "https://hockeychallengehelper.com"
+HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; TimsPicksBot/1.0)"}
 
-TODAY = datetime.date.today().strftime("%B %d, %Y")
+ANTHROPIC_API_KEY   = os.environ["ANTHROPIC_API_KEY"]
+TWILIO_ACCOUNT_SID  = os.environ["TWILIO_ACCOUNT_SID"]
+TWILIO_AUTH_TOKEN   = os.environ["TWILIO_AUTH_TOKEN"]
+TWILIO_FROM         = os.environ["TWILIO_FROM"]
+TWILIO_TO           = os.environ["TWILIO_TO"]
 
+# ── Scrape ────────────────────────────────────────────────────────────────────
+def fetch_page(url: str) -> str:
+    req = Request(url, headers=HEADERS)
+    with urlopen(req, timeout=15) as resp:
+        return resp.read().decode("utf-8", errors="ignore")
 
-def fetch_picks_json() -> dict | None:
-    """
-    First attempt: ask Claude to return structured JSON picks.
-    Returns a dict on success, None if parsing fails.
-    """
+def strip_tags(html: str) -> str:
+    """Very lightweight tag stripper — no external deps needed."""
+    text = re.sub(r"<style[^>]*>.*?</style>", " ", html, flags=re.S)
+    text = re.sub(r"<script[^>]*>.*?</script>", " ", text, flags=re.S)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"&nbsp;", " ", text)
+    text = re.sub(r"&amp;", "&", text)
+    text = re.sub(r"&lt;", "<", text)
+    text = re.sub(r"&gt;", ">", text)
+    text = re.sub(r"\s{2,}", " ", text)
+    return text.strip()
+
+# ── Summarise with Claude ─────────────────────────────────────────────────────
+def get_picks_summary(page_text: str) -> str:
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-    prompt = f"""Today is {TODAY}. Search for today's NHL games and identify the best goal scorer picks for the Tim Hortons Hockey Challenge.
+    prompt = f"""
+You are an NHL daily-picks assistant. Below is the raw text scraped from
+hockeychallengehelper.com. Your job:
 
-Use sites like DailyFaceoff.com, Dobber Hockey, or any NHL stats source to find today's games and top forwards.
+1. Identify today's top recommended player picks (typically skaters and goalies
+   for the NHL Daily Challenge or similar contest).
+2. For each pick include: player name, team, and why they are recommended
+   (e.g. matchup, points/goals pace, power-play time, etc.).
+3. Keep the total SMS message under 320 characters so it fits in 2 texts.
+4. Format as:
+   🏒 Tim's Picks – <date>
+   • <Player>, <Team> – <short reason>
+   • ...
+   Good luck!
 
-You MUST respond with ONLY a raw JSON object. Do not include any explanation, apology, or text outside the JSON. Do not use markdown or code fences. Start your response with {{ and end with }}.
+Raw page text (first 8000 chars):
+{page_text[:8000]}
+"""
 
-Use this exact structure:
-{{
-  "date": "{TODAY}",
-  "top3": [
-    {{"rank": 1, "name": "First Last", "team": "ABC", "opponent": "vs XYZ", "goal_prob": "40%", "reason": "Top line, strong matchup"}},
-    {{"rank": 2, "name": "First Last", "team": "ABC", "opponent": "vs XYZ", "goal_prob": "36%", "reason": "PP1, hot streak"}},
-    {{"rank": 3, "name": "First Last", "team": "ABC", "opponent": "vs XYZ", "goal_prob": "33%", "reason": "High-scoring team tonight"}}
-  ],
-  "best_matchup": {{"name": "First Last", "team": "ABC", "opponent": "vs XYZ", "reason": "Facing weak goalie"}},
-  "sleeper": {{"name": "First Last", "team": "ABC", "opponent": "vs XYZ", "reason": "Under the radar value pick"}},
-  "summary": "One sentence about today's NHL slate."
-}}
-
-Use real player names from today's actual NHL schedule. If you are unsure of exact probabilities, estimate based on line placement and matchup quality."""
-
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=1000,
-        tools=[{"type": "web_search_20250305", "name": "web_search"}],
-        messages=[{"role": "user", "content": prompt}]
+    message = client.messages.create(
+        model="claude-opus-4-5",
+        max_tokens=400,
+        messages=[{"role": "user", "content": prompt}],
     )
+    return message.content[0].text.strip()
 
-    raw = "".join(b.text for b in response.content if hasattr(b, "text")).strip()
-    raw = raw.replace("```json", "").replace("```", "").strip()
-    print(f"[DEBUG] Raw response:\n{raw[:500]}\n")
-
-    # Try direct parse
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        pass
-
-    # Try extracting JSON block
-    match = re.search(r"\{[\s\S]*\}", raw)
-    if match:
-        try:
-            return json.loads(match.group())
-        except json.JSONDecodeError:
-            pass
-
-    return None  # Parsing failed
-
-
-def fetch_picks_text() -> str:
-    """
-    Fallback: ask Claude for picks as plain text if JSON fails.
-    """
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-
-    prompt = f"""Today is {TODAY}. Search for today's NHL games and give me the top 3 goal scorer picks for the Tim Hortons Hockey Challenge.
-
-Format your response as a short, clean text message like this example:
-
-🏒 TIMS PICKS — March 4, 2026
-
-🎯 TOP 3 PICKS:
-1. Auston Matthews (TOR) vs BUF — 44% goal prob. Top line, PP1.
-2. Leon Draisaitl (EDM) vs CGY — 41% goal prob. Elite scorer, rivalry game.
-3. David Pastrnak (BOS) vs MTL — 38% goal prob. Hot streak, weak goalie.
-
-📈 BEST MATCHUP: Nathan MacKinnon (COL) vs ARI — faces backup goalie.
-😴 SLEEPER: Brock Boeser (VAN) vs SEA — sneaky value on PP1.
-
-📊 Strong 7-game slate tonight with several high-scoring matchups.
-
-Good luck! ☕
-
-Use real player names from today's actual schedule."""
-
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=600,
-        tools=[{"type": "web_search_20250305", "name": "web_search"}],
-        messages=[{"role": "user", "content": prompt}]
+# ── Send SMS ──────────────────────────────────────────────────────────────────
+def send_sms(body: str) -> None:
+    twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+    message = twilio_client.messages.create(
+        body=body,
+        from_=TWILIO_FROM,
+        to=TWILIO_TO,
     )
+    print(f"SMS sent — SID: {message.sid}")
 
-    return "".join(b.text for b in response.content if hasattr(b, "text")).strip()
-
-
-def build_sms_from_json(picks: dict) -> str:
-    parts = [f"TIMS PICKS {picks.get('date', TODAY)}", "TOP 3:"]
-
-    for p in picks.get("top3", []):
-        parts.append(f"{p.get('rank','')}. {p.get('name','?')} ({p.get('team','')}) {p.get('opponent','')} {p.get('goal_prob','')}")
-
-    bm = picks.get("best_matchup")
-    if bm:
-        if isinstance(bm, list): bm = bm[0]
-        parts.append(f"MATCHUP: {bm.get('name','?')} ({bm.get('team','')}) {bm.get('opponent','')}")
-
-    sl = picks.get("sleeper")
-    if sl:
-        if isinstance(sl, list): sl = sl[0]
-        parts.append(f"SLEEPER: {sl.get('name','?')} ({sl.get('team','')}) {sl.get('opponent','')}")
-
-    parts.append("Good luck!")
-    msg = "\n".join(parts)
-    return msg[:300] if len(msg) > 300 else msg
-
-
-def send_sms(body: str) -> str:
-    client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-    message = client.messages.create(body=body, from_=TWILIO_FROM, to=TWILIO_TO)
-    return message.sid
-
-
+# ── Main ──────────────────────────────────────────────────────────────────────
 def main():
-    print(f"⏳ Fetching picks for {TODAY}...")
+    print(f"Fetching {URL} …")
+    html = fetch_page(URL)
+    page_text = strip_tags(html)
+    print(f"Page text length: {len(page_text)} chars")
 
-    # Try JSON first
-    picks_json = fetch_picks_json()
+    print("Asking Claude for top picks …")
+    summary = get_picks_summary(page_text)
+    print(f"Summary:\n{summary}")
 
-    if picks_json:
-        print("✅ Got structured picks.")
-        sms_body = build_sms_from_json(picks_json)
-    else:
-        print("⚠️  JSON parse failed, falling back to plain text picks...")
-        sms_body = fetch_picks_text()
-
-    print("\n── SMS PREVIEW ──────────────────────────")
-    print(sms_body)
-    print("─────────────────────────────────────────\n")
-
-    sid = send_sms(sms_body)
-    print(f"✅ SMS sent! Twilio SID: {sid}")
-
+    print("Sending SMS …")
+    send_sms(summary)
 
 if __name__ == "__main__":
     main()
