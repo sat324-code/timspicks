@@ -54,23 +54,29 @@ def get_picks_summary(page_text: str) -> str:
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     prompt = f"""
-You are an NHL picks assistant. From the text below from hockeychallengehelper.com,
-extract TODAY's top 5 recommended players for the Tim Hortons NHL Hockey Challenge.
+You are an NHL picks assistant analyzing data from hockeychallengehelper.com.
+
+The page contains 3 separate pick tables labeled "Pick #1", "Pick #2", and "Pick #3".
+Each table lists multiple players with their stats including goal-scoring odds/probability.
+
+Your task:
+- From the "Pick #1" table: select the ONE player with the best odds of scoring a goal
+- From the "Pick #2" table: select the ONE player with the best odds of scoring a goal  
+- From the "Pick #3" table: select the ONE player with the best odds of scoring a goal
 
 Rules:
 - TOTAL message must be 300 characters or less (strict hard limit)
-- Format as multiple lines like this example:
+- Format EXACTLY like this:
   🏒 Tim's Picks:
-  Laine(CBJ) 3.2pts
-  Aho(CAR) 2.8pts
-  Hellebuyck(WPG) 2.1pts
-- Include player name, (TEAM abbreviation), and projected points score
+  P1: Laine(CBJ) 3.2pts
+  P2: Aho(CAR) 2.8pts
+  P3: Hellebuyck(WPG) 2.1pts
+- Include pick number prefix (P1/P2/P3), player name, (TEAM abbreviation), and projected points
 - Round projected points to 1 decimal place
-- If a goalie is recommended include them last
 - Output ONLY the formatted picks, nothing else
 
 Page text:
-{page_text[:6000]}
+{page_text[:8000]}
 """
 
     message = client.messages.create(
