@@ -56,24 +56,24 @@ def get_picks_summary(page_text: str) -> str:
     prompt = f"""
 You are an NHL picks assistant analyzing data from hockeychallengehelper.com.
 
-The page contains 3 separate pick tables labeled "Pick #1", "Pick #2", and "Pick #3".
-Each table lists multiple players with their stats including goal-scoring odds/probability.
+The page has 3 tables: "Pick # 1", "Pick # 2", and "Pick # 3".
+Each table has these columns: Name, Pos, GP, G, Shots/GP, Shoot%, PP.TOI/GP, TOI/GP, Goals/GP, EV Line, PP Line, H/A, Opp.GAA
 
 Your task:
-- From the "Pick #1" table: select the ONE player with the best odds of scoring a goal
-- From the "Pick #2" table: select the ONE player with the best odds of scoring a goal  
-- From the "Pick #3" table: select the ONE player with the best odds of scoring a goal
+- From "Pick # 1": select the ONE player with the highest Goals/GP value
+- From "Pick # 2": select the ONE player with the highest Goals/GP value
+- From "Pick # 3": select the ONE player with the highest Goals/GP value
 
-Rules:
-- TOTAL message must be 300 characters or less (strict hard limit)
-- Format EXACTLY like this:
-  🏒 Tim's Picks:
-  P1: Laine(CBJ) 3.2pts
-  P2: Aho(CAR) 2.8pts
-  P3: Hellebuyck(WPG) 2.1pts
-- Include pick number prefix (P1/P2/P3), player name, (TEAM abbreviation), and projected points
-- Round projected points to 1 decimal place
-- Output ONLY the formatted picks, nothing else
+Important: Goals/GP is the 9th column (e.g. 0.58, 0.36, 0.32). Use this column ONLY to rank players.
+Ignore any warnings or highlighted rows — pick purely on highest Goals/GP per table.
+
+Format the output EXACTLY like this (300 character max total):
+🏒 Tim's Picks:
+P1: Caufield(MTL) 0.58g/gp
+P2: Blueger(TOR) 0.36g/gp
+P3: Holloway(EDM) 0.32g/gp
+
+Output ONLY the 4 lines above, nothing else.
 
 Page text:
 {page_text[:8000]}
